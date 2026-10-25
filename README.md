@@ -4,9 +4,9 @@ Small Python (stdlib-only) practice tool to calculate **superheat** and/or **sub
 
 **R-410A · R-22 · R-134a · R-404A · R-407C · R-32 · R-454B**
 
-Saturation temperatures come from a **compact embedded PT table** with linear interpolation. This is for learning only — **real field work needs a manufacturer PT chart or a refrigerant-rated digital manifold**.
+Saturation temperatures come from an **embedded PT table generated with CoolProp** (R-454B cross-checked against the Chemours Opteon XL41 chart), with linear interpolation. This is for learning only — **real field work needs a manufacturer PT chart or a refrigerant-rated digital manifold**.
 
-Zeotropic blends (**R-404A**, **R-407C**, **R-454B**) use an **approximate mid-glide** curve (not separate bubble/dew points). Treat all guidance as practice-only.
+Each refrigerant has a **dew** curve (used for superheat) and a **bubble** curve (used for subcooling); for zeotropic blends (**R-404A**, **R-407C**, **R-454B**) these differ by the glide. Verify against the OEM PT chart. Treat all guidance as practice-only.
 
 ## Formulas
 
@@ -32,8 +32,8 @@ python3 hvac_calc.py \
   --refrigerant R-410A \
   --suction-psig 118 \
   --suction-temp 55 \
-  --liquid-psig 400 \
-  --liquid-temp 95
+  --liquid-psig 318 \
+  --liquid-temp 90
 ```
 
 ### Interactive mode
@@ -57,7 +57,7 @@ python3 hvac_calc.py \
 
 ```bash
 python3 hvac_calc.py --mode superheat -r R-134a --suction-psig 35 --suction-temp 50
-python3 hvac_calc.py --mode both -r R-404A --suction-psig 70 --suction-temp 30 --liquid-psig 250 --liquid-temp 90
+python3 hvac_calc.py --mode both -r R-404A --suction-psig 70 --suction-temp 40 --liquid-psig 250 --liquid-temp 90
 python3 hvac_calc.py --mode superheat -r R-407C --suction-psig 70 --suction-temp 45
 python3 hvac_calc.py --mode both -r R-32 --suction-psig 120 --suction-temp 55 --liquid-psig 400 --liquid-temp 95
 python3 hvac_calc.py --mode both -r R-454B --suction-psig 118 --suction-temp 55 --liquid-psig 400 --liquid-temp 95

@@ -2,13 +2,13 @@
 """
 HVAC/R Superheat & Subcooling practice calculator (stdlib only).
 
-Uses compact embedded pressure-temperature (PT) saturation tables with
-linear interpolation for common HVAC/R refrigerants. This is for
+Uses embedded pressure-temperature (PT) saturation tables (CoolProp-generated)
+with linear interpolation for common HVAC/R refrigerants. This is for
 learning/practice only — real field work requires a manufacturer PT chart
 or gauge set rated for the refrigerant in use.
 
-Zeotropic blends (e.g. R-404A, R-407C, R-454B) use a single mid-range
-approximate curve; real charts distinguish bubble/dew points (glide).
+Zeotropic blends (e.g. R-404A, R-407C, R-454B) have separate dew (used for
+superheat) and bubble (used for subcooling) curves.
 """
 
 from __future__ import annotations
@@ -18,281 +18,116 @@ import sys
 from typing import Dict, List, Tuple
 
 # ---------------------------------------------------------------------------
-# Compact saturation tables: (psig, Tsat °F)
-# Approximate values for educational use. Documented as approximate.
-# Real jobs need a PT chart / digital manifold for the exact refrigerant blend.
+# Saturation PT tables: (Tsat °F, DEW psig, BUBBLE psig), -40..130 °F every 5 °F.
+# Generated from CoolProp (HEOS); psig = psia - 14.696. Same data and generator
+# as Aburcham110/hvac-field-toolkit tools/gen_pt_tables.py.
+# R-454B = CoolProp mixture R32/R1234yf 68.9/31.1 wt %, cross-checked against the
+# Chemours Opteon XL41 Temperature-Pressure Data (C-10270 rev 07-23) within 0.5 °F.
+# Superheat uses the DEW (saturated vapor) curve; subcooling uses BUBBLE
+# (saturated liquid). Always verify against the OEM PT chart.
 # ---------------------------------------------------------------------------
 
-# R-410A (approx. bubble/dew mid-range; educational compact table)
-R410A_TABLE: List[Tuple[float, float]] = [
-    (50, -20),
-    (70, -5),
-    (80, 2),
-    (90, 8),
-    (100, 14),
-    (110, 19),
-    (118, 23),
-    (125, 26),
-    (130, 28),
-    (140, 33),
-    (150, 37),
-    (160, 41),
-    (170, 45),
-    (180, 48),
-    (190, 52),
-    (200, 55),
-    (210, 58),
-    (220, 61),
-    (230, 64),
-    (240, 67),
-    (250, 70),
-    (260, 72),
-    (270, 75),
-    (280, 77),
-    (290, 80),
-    (300, 82),
-    (320, 87),
-    (340, 91),
-    (360, 95),
-    (380, 99),
-    (400, 103),
-    (420, 106),
-    (440, 110),
-    (460, 113),
-    (480, 116),
-    (500, 119),
-]
-
-# R-22 (approx.; educational compact table)
-R22_TABLE: List[Tuple[float, float]] = [
-    (20, -20),
-    (30, -5),
-    (35, 2),
-    (40, 8),
-    (45, 13),
-    (49, 16),
-    (55, 22),
-    (60, 26),
-    (65, 30),
-    (70, 33),
-    (75, 37),
-    (80, 40),
-    (85, 43),
-    (90, 46),
-    (95, 49),
-    (100, 52),
-    (105, 54),
-    (110, 57),
-    (120, 62),
-    (130, 66),
-    (140, 70),
-    (150, 74),
-    (160, 78),
-    (170, 81),
-    (180, 84),
-    (190, 87),
-    (200, 90),
-    (210, 93),
-    (220, 96),
-    (230, 98),
-    (240, 101),
-    (250, 104),
-    (260, 106),
-    (270, 109),
-    (280, 111),
-    (300, 116),
-]
-
-# R-134a (approx.; educational compact table)
-R134A_TABLE: List[Tuple[float, float]] = [
-    (0, -15),
-    (5, -5),
-    (10, 5),
-    (15, 12),
-    (20, 19),
-    (25, 26),
-    (30, 32),
-    (35, 37),
-    (40, 42),
-    (45, 47),
-    (50, 52),
-    (55, 56),
-    (60, 60),
-    (65, 64),
-    (70, 68),
-    (75, 72),
-    (80, 75),
-    (85, 79),
-    (90, 82),
-    (95, 85),
-    (100, 88),
-    (110, 94),
-    (120, 100),
-    (130, 105),
-    (140, 110),
-    (150, 115),
-    (160, 119),
-    (170, 124),
-    (180, 128),
-    (190, 132),
-    (200, 136),
-    (220, 143),
-    (240, 150),
-    (250, 153),
-]
-
-# R-404A (approx. mid-glide; educational compact table)
-R404A_TABLE: List[Tuple[float, float]] = [
-    (20, -28),
-    (30, -16),
-    (40, -7),
-    (50, 1),
-    (60, 8),
-    (70, 14),
-    (80, 20),
-    (90, 25),
-    (100, 30),
-    (110, 35),
-    (120, 39),
-    (130, 43),
-    (140, 47),
-    (150, 51),
-    (160, 54),
-    (170, 58),
-    (180, 61),
-    (190, 64),
-    (200, 67),
-    (220, 73),
-    (240, 78),
-    (250, 81),
-    (260, 83),
-    (280, 88),
-    (300, 93),
-    (320, 97),
-    (340, 102),
-    (360, 106),
-    (380, 110),
-    (400, 114),
-    (420, 118),
-    (440, 121),
-]
-
-# R-407C (approx. mid-glide; educational compact table)
-R407C_TABLE: List[Tuple[float, float]] = [
-    (30, -10),
-    (40, 0),
-    (50, 9),
-    (60, 17),
-    (70, 24),
-    (80, 30),
-    (90, 36),
-    (100, 41),
-    (110, 46),
-    (120, 50),
-    (130, 55),
-    (140, 59),
-    (150, 63),
-    (160, 66),
-    (170, 70),
-    (180, 73),
-    (190, 76),
-    (200, 79),
-    (220, 85),
-    (240, 91),
-    (250, 93),
-    (260, 96),
-    (280, 101),
-    (300, 105),
-    (320, 110),
-    (340, 114),
-    (360, 118),
-    (380, 122),
-    (400, 126),
-    (420, 129),
-]
-
-# R-32 (approx.; educational compact table)
-R32_TABLE: List[Tuple[float, float]] = [
-    (50, -16),
-    (70, -1),
-    (80, 5),
-    (90, 11),
-    (100, 16),
-    (110, 21),
-    (120, 26),
-    (130, 30),
-    (140, 34),
-    (150, 38),
-    (160, 42),
-    (170, 45),
-    (180, 49),
-    (190, 52),
-    (200, 55),
-    (210, 58),
-    (220, 61),
-    (230, 64),
-    (240, 67),
-    (250, 69),
-    (260, 72),
-    (280, 77),
-    (300, 81),
-    (320, 86),
-    (340, 90),
-    (360, 94),
-    (380, 98),
-    (400, 101),
-    (420, 105),
-    (440, 108),
-    (460, 112),
-    (480, 115),
-    (500, 118),
-]
-
-# R-454B (approx. mid-glide; educational compact table — R-410A-class A2L)
-R454B_TABLE: List[Tuple[float, float]] = [
-    (50, -18),
-    (70, -3),
-    (80, 4),
-    (90, 10),
-    (100, 16),
-    (110, 21),
-    (120, 26),
-    (130, 30),
-    (140, 34),
-    (150, 38),
-    (160, 42),
-    (170, 46),
-    (180, 49),
-    (190, 53),
-    (200, 56),
-    (210, 59),
-    (220, 62),
-    (230, 65),
-    (240, 68),
-    (250, 70),
-    (260, 73),
-    (280, 78),
-    (300, 82),
-    (320, 87),
-    (340, 91),
-    (360, 95),
-    (380, 99),
-    (400, 103),
-    (420, 106),
-    (440, 110),
-    (460, 113),
-    (480, 116),
-    (500, 119),
-]
-
-TABLES: Dict[str, List[Tuple[float, float]]] = {
-    "R-410A": R410A_TABLE,
-    "R-22": R22_TABLE,
-    "R-134a": R134A_TABLE,
-    "R-404A": R404A_TABLE,
-    "R-407C": R407C_TABLE,
-    "R-32": R32_TABLE,
-    "R-454B": R454B_TABLE,
+# Generated by tools/gen_pt_tables.py (CoolProp 8.0.0)
+# (Tsat °F, dew psig, bubble psig)
+TABLES: Dict[str, List[Tuple[float, float, float]]] = {
+    "R-410A": [
+        (-40, 10.7, 10.8), (-35, 14.0, 14.1), (-30, 17.7, 17.8),
+        (-25, 21.8, 21.9), (-20, 26.2, 26.3), (-15, 31.0, 31.2),
+        (-10, 36.3, 36.5), (-5, 42.0, 42.2), (0, 48.2, 48.4),
+        (5, 54.9, 55.2), (10, 62.2, 62.4), (15, 70.0, 70.3),
+        (20, 78.4, 78.7), (25, 87.4, 87.7), (30, 97.0, 97.4),
+        (35, 107.3, 107.7), (40, 118.4, 118.8), (45, 130.1, 130.6),
+        (50, 142.6, 143.1), (55, 156.0, 156.5), (60, 170.1, 170.7),
+        (65, 185.1, 185.8), (70, 201.1, 201.7), (75, 217.9, 218.6),
+        (80, 235.7, 236.5), (85, 254.6, 255.4), (90, 274.5, 275.3),
+        (95, 295.4, 296.4), (100, 317.6, 318.5), (105, 340.8, 341.9),
+        (110, 365.4, 366.5), (115, 391.2, 392.3), (120, 418.3, 419.5),
+        (125, 446.8, 448.0), (130, 476.8, 478.0),
+    ],
+    "R-22": [
+        (-40, 0.6, 0.6), (-35, 2.6, 2.6), (-30, 4.9, 4.9),
+        (-25, 7.4, 7.4), (-20, 10.2, 10.2), (-15, 13.2, 13.2),
+        (-10, 16.5, 16.5), (-5, 20.1, 20.1), (0, 24.0, 24.0),
+        (5, 28.3, 28.3), (10, 32.8, 32.8), (15, 37.8, 37.8),
+        (20, 43.1, 43.1), (25, 48.8, 48.8), (30, 55.0, 55.0),
+        (35, 61.5, 61.5), (40, 68.6, 68.6), (45, 76.1, 76.1),
+        (50, 84.1, 84.1), (55, 92.6, 92.6), (60, 101.6, 101.6),
+        (65, 111.2, 111.2), (70, 121.4, 121.4), (75, 132.2, 132.2),
+        (80, 143.6, 143.6), (85, 155.7, 155.7), (90, 168.4, 168.4),
+        (95, 181.8, 181.8), (100, 195.9, 195.9), (105, 210.8, 210.8),
+        (110, 226.4, 226.4), (115, 242.8, 242.8), (120, 260.0, 260.0),
+        (125, 278.0, 278.0), (130, 296.9, 296.9),
+    ],
+    "R-134a": [
+        (-40, -7.3, -7.3), (-35, -6.1, -6.1), (-30, -4.8, -4.8),
+        (-25, -3.4, -3.4), (-20, -1.8, -1.8), (-15, -0.0, -0.0),
+        (-10, 1.9, 1.9), (-5, 4.1, 4.1), (0, 6.5, 6.5),
+        (5, 9.1, 9.1), (10, 11.9, 11.9), (15, 15.0, 15.0),
+        (20, 18.4, 18.4), (25, 22.1, 22.1), (30, 26.1, 26.1),
+        (35, 30.4, 30.4), (40, 35.0, 35.0), (45, 40.1, 40.1),
+        (50, 45.4, 45.4), (55, 51.2, 51.2), (60, 57.4, 57.4),
+        (65, 64.0, 64.0), (70, 71.1, 71.1), (75, 78.7, 78.7),
+        (80, 86.7, 86.7), (85, 95.2, 95.2), (90, 104.3, 104.3),
+        (95, 113.9, 113.9), (100, 124.2, 124.2), (105, 135.0, 135.0),
+        (110, 146.4, 146.4), (115, 158.4, 158.4), (120, 171.2, 171.2),
+        (125, 184.6, 184.6), (130, 198.7, 198.7),
+    ],
+    "R-404A": [
+        (-40, 4.3, 4.9), (-35, 6.8, 7.5), (-30, 9.6, 10.3),
+        (-25, 12.7, 13.4), (-20, 16.0, 16.8), (-15, 19.7, 20.5),
+        (-10, 23.6, 24.6), (-5, 27.9, 28.9), (0, 32.6, 33.7),
+        (5, 37.7, 38.8), (10, 43.1, 44.3), (15, 49.0, 50.2),
+        (20, 55.3, 56.6), (25, 62.1, 63.4), (30, 69.3, 70.7),
+        (35, 77.1, 78.6), (40, 85.4, 86.9), (45, 94.2, 95.8),
+        (50, 103.6, 105.3), (55, 113.6, 115.3), (60, 124.2, 126.0),
+        (65, 135.5, 137.3), (70, 147.4, 149.3), (75, 160.1, 162.0),
+        (80, 173.4, 175.4), (85, 187.5, 189.5), (90, 202.4, 204.5),
+        (95, 218.1, 220.2), (100, 234.7, 236.8), (105, 252.1, 254.2),
+        (110, 270.4, 272.6), (115, 289.7, 291.8), (120, 309.9, 312.1),
+        (125, 331.2, 333.4), (130, 353.6, 355.7),
+    ],
+    "R-407C": [
+        (-40, -2.3, 2.7), (-35, -0.4, 5.1), (-30, 1.6, 7.7),
+        (-25, 3.9, 10.6), (-20, 6.5, 13.7), (-15, 9.3, 17.2),
+        (-10, 12.3, 20.9), (-5, 15.7, 25.0), (0, 19.4, 29.5),
+        (5, 23.5, 34.3), (10, 27.9, 39.5), (15, 32.7, 45.2),
+        (20, 37.9, 51.2), (25, 43.5, 57.7), (30, 49.6, 64.7),
+        (35, 56.1, 72.2), (40, 63.2, 80.2), (45, 70.7, 88.8),
+        (50, 78.8, 97.9), (55, 87.5, 107.6), (60, 96.8, 117.9),
+        (65, 106.7, 128.9), (70, 117.3, 140.5), (75, 128.5, 152.8),
+        (80, 140.5, 165.8), (85, 153.2, 179.6), (90, 166.7, 194.1),
+        (95, 181.0, 209.4), (100, 196.1, 225.5), (105, 212.1, 242.4),
+        (110, 229.0, 260.2), (115, 246.9, 278.9), (120, 265.8, 298.6),
+        (125, 285.6, 319.2), (130, 306.6, 340.7),
+    ],
+    "R-32": [
+        (-40, 11.0, 11.0), (-35, 14.4, 14.4), (-30, 18.2, 18.2),
+        (-25, 22.3, 22.3), (-20, 26.8, 26.8), (-15, 31.7, 31.7),
+        (-10, 37.1, 37.1), (-5, 42.9, 42.9), (0, 49.3, 49.3),
+        (5, 56.1, 56.1), (10, 63.5, 63.5), (15, 71.4, 71.4),
+        (20, 80.0, 80.0), (25, 89.2, 89.2), (30, 99.1, 99.1),
+        (35, 109.7, 109.7), (40, 121.0, 121.0), (45, 133.0, 133.0),
+        (50, 145.8, 145.8), (55, 159.5, 159.5), (60, 174.0, 174.0),
+        (65, 189.5, 189.5), (70, 205.8, 205.8), (75, 223.2, 223.2),
+        (80, 241.5, 241.5), (85, 260.9, 260.9), (90, 281.3, 281.3),
+        (95, 302.9, 302.9), (100, 325.7, 325.7), (105, 349.6, 349.6),
+        (110, 374.9, 374.9), (115, 401.4, 401.4), (120, 429.3, 429.3),
+        (125, 458.7, 458.7), (130, 489.5, 489.5),
+    ],
+    "R-454B": [
+        (-40, 8.5, 9.8), (-35, 11.5, 13.0), (-30, 14.9, 16.6),
+        (-25, 18.6, 20.5), (-20, 22.7, 24.7), (-15, 27.1, 29.4),
+        (-10, 32.0, 34.5), (-5, 37.2, 40.0), (0, 42.9, 45.9),
+        (5, 49.1, 52.4), (10, 55.7, 59.3), (15, 62.9, 66.8),
+        (20, 70.6, 74.8), (25, 78.9, 83.5), (30, 87.8, 92.7),
+        (35, 97.3, 102.6), (40, 107.5, 113.2), (45, 118.3, 124.5),
+        (50, 129.9, 136.4), (55, 142.2, 149.2), (60, 155.3, 162.7),
+        (65, 169.2, 177.1), (70, 183.9, 192.3), (75, 199.5, 208.4),
+        (80, 216.0, 225.4), (85, 233.5, 243.4), (90, 251.9, 262.3),
+        (95, 271.4, 282.3), (100, 291.9, 303.3), (105, 313.5, 325.4),
+        (110, 336.3, 348.6), (115, 360.3, 373.0), (120, 385.5, 398.6),
+        (125, 412.1, 425.5), (130, 440.0, 453.6),
+    ],
 }
 
 SUPPORTED = ", ".join(TABLES.keys())
@@ -323,37 +158,32 @@ ALIASES = {
 }
 
 
-def sat_temp_f(refrigerant: str, pressure_psig: float) -> float:
-    """Linearly interpolate saturation temperature (°F) from the compact table."""
+def sat_temp_f(refrigerant: str, pressure_psig: float, side: str = "dew") -> float:
+    """Interpolate saturation temperature (°F) on the dew or bubble curve."""
     table = TABLES[refrigerant]
-    if pressure_psig < table[0][0] or pressure_psig > table[-1][0]:
-        lo, hi = table[0][0], table[-1][0]
+    col = 1 if side == "dew" else 2
+    lo, hi = table[0][col], table[-1][col]
+    if pressure_psig < lo or pressure_psig > hi:
         raise ValueError(
             f"Pressure {pressure_psig} psig outside table range "
             f"({lo:.0f}–{hi:.0f} psig) for {refrigerant}."
         )
-
-    for i in range(len(table) - 1):
-        p0, t0 = table[i]
-        p1, t1 = table[i + 1]
+    for a, b in zip(table, table[1:]):
+        p0, p1 = a[col], b[col]
         if p0 <= pressure_psig <= p1:
-            if p1 == p0:
-                return t0
-            frac = (pressure_psig - p0) / (p1 - p0)
-            return t0 + frac * (t1 - t0)
-
-    return table[-1][1]
+            return a[0] + (pressure_psig - p0) / (p1 - p0) * (b[0] - a[0])
+    return table[-1][0]
 
 
 def superheat_f(suction_psig: float, suction_temp_f: float, refrigerant: str) -> float:
-    """Superheat = actual suction line temp − sat temp at suction pressure."""
-    tsat = sat_temp_f(refrigerant, suction_psig)
+    """Superheat = actual suction line temp − DEW sat temp at suction pressure."""
+    tsat = sat_temp_f(refrigerant, suction_psig, "dew")
     return suction_temp_f - tsat
 
 
 def subcooling_f(liquid_psig: float, liquid_temp_f: float, refrigerant: str) -> float:
-    """Subcooling = sat temp at liquid pressure − actual liquid line temp."""
-    tsat = sat_temp_f(refrigerant, liquid_psig)
+    """Subcooling = BUBBLE sat temp at liquid pressure − actual liquid line temp."""
+    tsat = sat_temp_f(refrigerant, liquid_psig, "bubble")
     return tsat - liquid_temp_f
 
 
@@ -435,17 +265,17 @@ def print_results(
 ) -> None:
     print()
     print(f"Refrigerant: {refrigerant}")
-    print("Note: Saturation temps from compact educational PT table (interpolated).")
-    print("      Zeotropic blends use an approximate mid-glide curve (not bubble/dew).")
-    print("      Real jobs need a manufacturer PT chart / rated manifold.\n")
+    print("Note: Saturation temps from embedded PT table (interpolated).")
+    print("      Superheat uses the dew curve; subcooling uses the bubble curve.")
+    print("      Verify against the OEM PT chart for the refrigerant.\n")
 
     if mode in ("superheat", "both"):
         assert suction_psig is not None and suction_temp is not None
-        tsat = sat_temp_f(refrigerant, suction_psig)
+        tsat = sat_temp_f(refrigerant, suction_psig, "dew")
         sh = superheat_f(suction_psig, suction_temp, refrigerant)
         print("--- Superheat ---")
         print(f"  Suction pressure:     {suction_psig:.1f} psig")
-        print(f"  Saturation temp:      {tsat:.1f} °F  (from table)")
+        print(f"  Saturation temp:      {tsat:.1f} °F  (dew, from table)")
         print(f"  Suction line temp:    {suction_temp:.1f} °F")
         print(f"  Superheat:            {sh:.1f} °F")
         print(f"  {guidance_superheat(sh)}")
@@ -453,11 +283,11 @@ def print_results(
 
     if mode in ("subcooling", "both"):
         assert liquid_psig is not None and liquid_temp is not None
-        tsat = sat_temp_f(refrigerant, liquid_psig)
+        tsat = sat_temp_f(refrigerant, liquid_psig, "bubble")
         sc = subcooling_f(liquid_psig, liquid_temp, refrigerant)
         print("--- Subcooling ---")
         print(f"  Liquid pressure:      {liquid_psig:.1f} psig")
-        print(f"  Saturation temp:      {tsat:.1f} °F  (from table)")
+        print(f"  Saturation temp:      {tsat:.1f} °F  (bubble, from table)")
         print(f"  Liquid line temp:     {liquid_temp:.1f} °F")
         print(f"  Subcooling:           {sc:.1f} °F")
         print(f"  {guidance_subcooling(sc)}")
@@ -468,7 +298,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
             "Practice CLI for HVAC/R superheat and subcooling using "
-            f"compact educational PT tables ({SUPPORTED})."
+            f"embedded PT tables with dew/bubble curves ({SUPPORTED})."
         )
     )
     p.add_argument(
